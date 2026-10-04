@@ -1,0 +1,199 @@
+trigger:
+  branches:
+    include:
+    - feature
+    - main
+pool:
+  name: B18_Agent
+variables:
+    - group: variable_groups
+
+parameters:
+- name: environment
+  displayName: Select Environment
+  type: string
+  default: preprod
+  values:
+  - preprod
+  - prod
+
+  -  name: TfSec
+     displayName: TfSec
+     type: boolean
+     default: true
+
+  -  name: TfLint
+     displayName: TfLint
+     type: boolean
+     default: true
+
+  -  name: Checkov
+     displayName: Checkov
+     type: boolean
+     default: true
+
+  -  name: Infracost
+     displayName: Infracost
+     type: boolean
+     default: true
+
+  -  name: plan
+     displayName: plan
+     type: boolean
+     default: true
+
+  -  name: apply
+     displayName: apply
+     type: boolean
+     default: true
+
+stages:
+
+- stage: Validation
+  displayName: validation_stage
+  jobs:
+  - job: ValidationJob
+    displayName: validation_job
+    steps:
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        backendServiceArm: '$(serviceConnection)'
+        backendAzureRmOverrideSubscriptionID: '$(subscriptionId)'
+        backendAzureRmResourceGroupName: '$(resourceGroupName)'
+        backendAzureRmStorageAccountName: '$(storageAccountName)'
+        backendAzureRmContainerName: '$(containerName)'
+        backendAzureRmKey: '$(stateKey)'
+        backendAzureRmUseEntraIdForAuthentication: false
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'validate'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        
+
+- stage: TfSec
+  condition: ${{parameters.TfSec}}
+  jobs:
+    - job: TfSec
+      displayName: TfSec
+      steps:
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: 'tfsec .'
+
+- stage: TfLint
+  condition: ${{parameters.TfLint}}
+  jobs:
+    - job: TfLint
+      displayName: TfLint
+      steps:
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                tflint --init
+                tflint
+
+- stage: Checkov
+  condition: ${{parameters.Checkov}}
+  jobs:
+    - job: Checkov
+      displayName: Checkov
+      steps:
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: 'checkov -d . --framework terraform --compact'
+
+- stage: Infracost
+  condition: ${{parameters.Infracost}}
+  jobs:
+    - job: Infracost
+      displayName: Infracost
+      steps:
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: 'infracost breakdown --path .'
+
+
+- stage: plan
+  condition: ${{parameters.plan}}
+  displayName: plan_stage
+  jobs:
+  - job: PlanJob
+    displayName: Plan_job
+    steps:
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        backendServiceArm: '$(serviceConnection)'
+        backendAzureRmOverrideSubscriptionID: '$(subscriptionId)'
+        backendAzureRmResourceGroupName: '$(resourceGroupName)'
+        backendAzureRmStorageAccountName: '$(storageAccountName)'
+        backendAzureRmContainerName: '$(containerName)'
+        backendAzureRmKey: '$(stateKey)'
+        environmentServiceNameAzureRM: '$(serviceConnection)'
+        backendAzureRmUseEntraIdForAuthentication: false
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        environmentServiceNameAzureRM: '$(serviceConnection)'
+
+- stage: Manual_Approval
+  condition: ${{parameters.apply}}
+  displayName: Manual_Approval
+  jobs:
+  - job: Approval
+    displayName: Terraform Apply Approval
+    pool: server
+
+    steps:
+    - task: ManualValidation@1
+      timeoutInMinutes: 60
+      inputs:
+        notifyUsers: 'shiva11421@gmail.com'
+        instructions: 'Review the Terraform plan and approve to continue with Apply.'
+        onTimeout: 'reject'
+              
+- stage: Apply
+  condition: ${{parameters.apply}}
+  displayName: Apply_stage
+  jobs:
+  - job: ApplyJob
+    displayName: Apply_job
+    steps:
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        backendServiceArm: '$(serviceConnection)'
+        backendAzureRmOverrideSubscriptionID: '$(subscriptionId)'
+        backendAzureRmResourceGroupName: '$(resourceGroupName)'
+        backendAzureRmStorageAccountName: '$(storageAccountName)'
+        backendAzureRmContainerName: '$(containerName)'
+        backendAzureRmKey: '$(stateKey)'
+        environmentServiceNameAzureRM: '$(serviceConnection)'
+        backendAzureRmUseEntraIdForAuthentication: false
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        environmentServiceNameAzureRM: '$(serviceConnection)'
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'apply'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/${{ parameters.environment }}'
+        environmentServiceNameAzureRM: '$(serviceConnection)'
+        args: '-auto-approve'
